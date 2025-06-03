@@ -1,0 +1,131 @@
+---
+title: "Visualización de muestras de ruido en Venecia"
+author: "Ezequiel Grenat"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Introducción
+Tomamos muestras de ruido ambiental registradas en Venecia mediante crowdsourcing via NoiseCapture. El objetivo es hacer una interpolación espacial y tomar otra ciudad de características diferentes (mayor densidad poblacional, mayor tamaño y menor dependencia del turismo) para compararlas entre si y probar distintos algoritmos de clustering. 
+
+
+## Carga de librerías
+
+```{r}
+# install.packages("remotes")
+#remotes::install_github("ropensci/osmdata")
+library(sf)
+library(ggplot2)
+library(osmdata)
+library(dplyr)
+library(geojsonsf)
+library(lubridate)
+library(rosm)
+library(ggspatial)
+
+
+```
+
+## 2. Cargar el archivo teojson presente en la carpeta 
+
+```{r}
+datos_path <- "Italy_Veneto_Venezia.points.geojson"
+ruido_venecia <- geojson_sf("Italy_Veneto_Venezia.points.geojson")
+# resumen del dataset
+cat("Cantidad total de muestras:", nrow(ruido_venecia), "
+")
+head(ruido_venecia)
+```
+
+```{r}
+# Convertir la columna de tiempo a fornmato mas manipulable 
+ruido_venecia$hora <- ymd_hms(ruido_venecia$time_ISO8601)
+
+# columna con hora en formato 24h
+ruido_venecia$hora_num <- hour(ruido_venecia$hora)
+
+# agrupamos por año y contamos la cantidad de muestras para poder elegir un corte
+
+# año de cada muestra
+ruido_venecia$anio <- year(ruido_venecia$hora)
+
+conteo_por_anio <- ruido_venecia_dia %>%
+  group_by(anio) %>%
+  summarise(n_muestras = n()) %>%
+  arrange(desc(n_muestras))
+
+# Mostrar el resultado
+print(conteo_por_anio)
+```
+
+
+# filtrar entre año y horario diurno y nocturno: 
+```{r}
+
+#filtrar año 2018
+ruido_venecia_2018 <- ruido_venecia %>% 
+  filter(anio == 2018)
+
+#filtrar entre 7 am y 18:59 
+ruido_venecia_dia <- ruido_venecia %>%
+  filter(hora_num >= 7 & hora_num < 19)
+
+cat("Muestras entre 7 y 19 hs:", nrow(ruido_venecia_dia), "\n")
+
+
+
+```
+
+## 3. Primera visualización de las muestras en un mapa de openstreetmap
+
+```{r}
+
+# transformamos  los puntos a EPSG:3857, ya que openStreetMap requiere dicho formato
+ruido_venecia_3857 <- st_transform(ruido_venecia, 3857)
+
+
+# area de interes para el mapa fijado manualmente, con la idea de que solamente salga la isla 
+area_interes_latlon <- matrix(
+  c(12.28, 45.41,   # xmin, ymin
+    12.38, 45.47),  # xmax, ymax
+  ncol = 2, byrow = TRUE,
+  dimnames = list(c("min", "max"), c("lon", "lat"))
+)
+
+
+delimitacion_manual = st_bbox(c(xmin = area_interes_latlon["min","lon"], 
+          xmax = area_interes_latlon["max","lon"],
+          ymin = area_interes_latlon["min","lat"], 
+          ymax = area_interes_latlon["max","lat"]), 
+          crs = 4326) #st_bbox toma el area de interes definida por area_interes_latlon y lo transforma a un objeto de sf
+
+#obtenemos esa delimitacion en formato apto para openStreetMap:
+area_interes_3857 <- st_transform(area_interes_sf, 3857) #sf --> 3857
+area_interes_3857_cordenadas <- st_bbox(area_interes_3857) 
+
+ggplot() +
+  annotation_map_tile(type = "cartodark", zoom = 15, cachedir = tempdir()) + #preferencias para el mapa importado de open street map
+  geom_sf(
+    data = ruido_venecia_3857,
+    aes(color = noise_level),
+    alpha = 0.7, size = 0.8
+  ) +
+  scale_color_viridis_c(option = "B", name = "Nivel de ruido (dB)") + #dejar E para colores interpretables por daltonicos
+  coord_sf(
+    xlim = c(area_interes_3857_cordenadas["xmin"], area_interes_3857_cordenadas["xmax"]),
+    ylim = c(area_interes_3857_cordenadas["ymin"], area_interes_3857_cordenadas["ymax"]),
+    expand = FALSE
+  ) +
+  labs(
+    title = "Nivel de ruido en Venecia según nivel de decibeles",
+    subtitle = "Año 2018, rango horario 07 - 19",
+    caption = "Fuente: NoiseCapture"
+  ) +
+  theme_minimal()
+
+
+```
